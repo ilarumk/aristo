@@ -14,6 +14,21 @@ DEBATE_MILESTONES = [
     "Polishing Your Delivery"
 ]
 
+def get_initial_guidance_prompt(topic, focus):
+    return f"""
+    You are guiding a student in preparing for a debate on: '{topic}'.
+    The current focus is: {focus}.
+    
+    Provide initial guidance on how to approach this part of the debate preparation.
+    Include:
+    1. A brief explanation of why this stage is important
+    2. Key points to consider
+    3. A suggested structure or outline for their response
+    4. An example or starting sentence to help them begin
+    
+    Keep your language simple and engaging for a 5th to 9th grade student.
+    """
+
 def get_debate_guidance_prompt(topic, focus, user_input, is_revision=False):
     base_prompt = f"""
     You are guiding a student in preparing for a debate on: '{topic}'.

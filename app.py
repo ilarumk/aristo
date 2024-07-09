@@ -1,7 +1,8 @@
 import streamlit as st
 import json
 from datetime import datetime
-from ai_config import initialize_gemini, get_debate_guidance_prompt, get_debate_structure_prompt
+from ai_config import initialize_gemini, get_initial_guidance_prompt, get_debate_guidance_prompt, get_debate_structure_prompt, DEBATE_MILESTONES
+
 
 # Initialize session state
 if 'topics' not in st.session_state:
@@ -102,8 +103,12 @@ def show_topics_page():
 
 from ai_config import initialize_gemini, get_debate_guidance_prompt, get_debate_structure_prompt, DEBATE_MILESTONES
 
+
+import streamlit as st
+from ai_config import initialize_gemini, get_initial_guidance_prompt, get_debate_guidance_prompt, get_debate_structure_prompt, DEBATE_MILESTONES
+
 def show_debate_page():
-    st.header(f"Current Topic: {st.session_state.current_topic}")
+    st.header(f"Current Topic: {st.session_state.current_topic}", divider='rainbow')
 
     tab1, tab2 = st.tabs(["Debate Preparation", "Notes"])
 
@@ -118,73 +123,97 @@ def show_debate_page():
             st.session_state.chat_histories[st.session_state.current_topic] = []
         if 'current_focus' not in st.session_state:
             st.session_state.current_focus = 0
-        if 'current_response' not in st.session_state:
-            st.session_state.current_response = ""
+        if 'current_responses' not in st.session_state:
+            st.session_state.current_responses = {}
+        if 'initial_guidance' not in st.session_state:
+            st.session_state.initial_guidance = ""
 
         chat_history = st.session_state.chat_histories[st.session_state.current_topic]
 
-        # Display chat history
+        # Current Focus
+        st.subheader(f"Current Focus: {DEBATE_MILESTONES[st.session_state.current_focus]}")
+
+        # Initial guidance
+        if not st.session_state.initial_guidance:
+            initial_prompt = get_initial_guidance_prompt(st.session_state.current_topic, DEBATE_MILESTONES[st.session_state.current_focus])
+            st.session_state.initial_guidance = model.generate_content(initial_prompt).text
+
+        st.write("Initial Guidance:")
+        st.info(st.session_state.initial_guidance)
+
+        # Display chat history for current focus
         chat_container = st.container()
         with chat_container:
-            for i, message in enumerate(chat_history):
+            for message in chat_history:
                 with st.chat_message(message["role"]):
                     st.write(message["content"])
 
-        # Debate guidance
-        progress = st.progress(st.session_state.current_focus / len(DEBATE_MILESTONES))
-        st.subheader(f"Current Focus: {DEBATE_MILESTONES[st.session_state.current_focus]}")
-
         # User input and feedback area
         with st.container():
-            st.markdown("<br>" * 2, unsafe_allow_html=True)  # Add some space
-            
-            # Callback function to handle form submission
-            def handle_submit():
-                user_input = st.session_state.user_input
-                if user_input:
-                    is_revision = len(chat_history) > 0 and chat_history[-1]["role"] == "assistant"
-                    chat_history.append({"role": "user", "content": user_input})
-                    
-                    # Generate AI response
-                    prompt = get_debate_guidance_prompt(
-                        st.session_state.current_topic,
-                        DEBATE_MILESTONES[st.session_state.current_focus],
-                        user_input,
-                        is_revision
-                    )
-                    response = model.generate_content(prompt)
-                    ai_message = response.text
-
-                    chat_history.append({"role": "assistant", "content": ai_message})
-                    st.session_state.current_response = user_input
-
             # Create a form for user input
             with st.form(key='user_input_form'):
-                user_input = st.text_area("Your response", key="user_input", height=150, value=st.session_state.current_response)
-                submit_button = st.form_submit_button(label="Get Feedback", on_click=handle_submit)
+                user_input = st.text_area(
+                    "Your response", 
+                    key=f"user_input_{st.session_state.current_focus}",
+                    height=150, 
+                    value=st.session_state.current_responses.get(st.session_state.current_focus, "")
+                )
+                submit_button = st.form_submit_button(label="Get Feedback")
 
-            # Options after receiving feedback
-            if len(chat_history) > 0 and chat_history[-1]["role"] == "assistant":
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.button("Revise Response"):
-                        st.session_state.current_response = user_input
-                        st.experimental_rerun()
-                with col2:
-                    if st.button("Complete and Move to Next Stage"):
-                        # Add the current response to notes
-                        if st.session_state.current_topic not in st.session_state.notes:
-                            st.session_state.notes[st.session_state.current_topic] = []
-                        st.session_state.notes[st.session_state.current_topic].append(user_input)
-                        st.success("Stage completed and added to notes!")
-                        
-                        # Move to next stage
-                        st.session_state.current_focus += 1
-                        if st.session_state.current_focus >= len(DEBATE_MILESTONES):
-                            st.session_state.current_focus = 0
-                            st.success("Congratulations! You've completed all stages. Starting over from the beginning.")
-                        st.session_state.current_response = ""
-                        st.experimental_rerun()
+            if submit_button and user_input:
+                is_revision = len(chat_history) > 0 and chat_history[-1]["role"] == "assistant"
+                chat_history.append({"role": "user", "content": user_input})
+                
+                # Generate AI response
+                prompt = get_debate_guidance_prompt(
+                    st.session_state.current_topic,
+                    DEBATE_MILESTONES[st.session_state.current_focus],
+                    user_input,
+                    is_revision
+                )
+                response = model.generate_content(prompt)
+                ai_message = response.text
+
+                chat_history.append({"role": "assistant", "content": ai_message})
+                
+                # Display the new feedback
+                with chat_container.chat_message("assistant"):
+                    st.write(ai_message)
+
+            # Always update current_responses with the latest user input
+            st.session_state.current_responses[st.session_state.current_focus] = user_input
+
+        # Navigation buttons at the bottom
+        st.markdown("<br>" * 2, unsafe_allow_html=True)  # Add some space
+        col1, col2, col3 = st.columns([1, 1, 1])
+        with col1:
+            if st.button("⬅️ Previous Stage", disabled=(st.session_state.current_focus == 0)):
+                st.session_state.current_focus = max(0, st.session_state.current_focus - 1)
+                st.session_state.initial_guidance = ""
+                st.session_state.chat_histories[st.session_state.current_topic] = []
+                st.experimental_rerun()
+        with col3:
+            if st.button("Complete and Move to Next Stage ➡️", type="primary"):
+                # Add the current response to notes
+                if st.session_state.current_topic not in st.session_state.notes:
+                    st.session_state.notes[st.session_state.current_topic] = []
+                # Save the final user input to notes
+                current_notes = st.session_state.notes[st.session_state.current_topic]
+                current_response = st.session_state.current_responses.get(st.session_state.current_focus, "")
+                if st.session_state.current_focus < len(current_notes):
+                    current_notes[st.session_state.current_focus] = f"{DEBATE_MILESTONES[st.session_state.current_focus]}: {current_response}"
+                else:
+                    current_notes.append(f"{DEBATE_MILESTONES[st.session_state.current_focus]}: {current_response}")
+                st.success("Stage completed and added to notes!")
+                
+                # Move to next stage
+                st.session_state.current_focus += 1
+                if st.session_state.current_focus >= len(DEBATE_MILESTONES):
+                    st.session_state.current_focus = 0
+                    st.success("Congratulations! You've completed all stages. Please check the Notes tab to generate your debate structure.")
+                st.session_state.initial_guidance = ""
+                st.session_state.chat_histories[st.session_state.current_topic] = []
+                st.experimental_rerun()
 
     with tab2:
         show_notes_page()
@@ -193,7 +222,7 @@ def show_notes_page():
     st.subheader(f"Notes for: {st.session_state.current_topic}")
 
     if st.session_state.current_topic not in st.session_state.notes:
-        st.write("No notes available for this topic yet. Add notes during the debate preparation!")
+        st.write("No notes available for this topic yet. Complete the debate preparation stages to generate notes!")
     else:
         for i, note in enumerate(st.session_state.notes[st.session_state.current_topic]):
             st.text_area(f"Note {i+1}", value=note, height=150, key=f"note_{st.session_state.current_topic}_{i}")
@@ -215,22 +244,32 @@ def show_notes_page():
                 notes = "\n".join(st.session_state.notes[st.session_state.current_topic])
                 prompt = get_debate_structure_prompt(st.session_state.current_topic, notes)
                 response = model.generate_content(prompt)
+                debate_structure = response.text
                 st.markdown("## Debate Structure")
-                st.write(response.text)
+                st.write(debate_structure)
+                
+                # Save the debate structure for the current user
+                if 'debate_structures' not in st.session_state:
+                    st.session_state.debate_structures = {}
+                st.session_state.debate_structures[st.session_state.current_topic] = debate_structure
+                st.success("Debate structure generated and saved!")
             else:
                 st.error("Please set up your Gemini API key in the settings.")
         else:
-            st.warning("No notes available. Add some notes during debate preparation to generate a structure.")
+            st.warning("No notes available. Complete the debate preparation stages to generate a structure.")
 
-    if st.button("Print Notes"):
+    if st.button("Print Notes and Debate Structure"):
         notes_text = f"Notes for topic: {st.session_state.current_topic}\n\n"
         for i, note in enumerate(st.session_state.notes.get(st.session_state.current_topic, [])):
             notes_text += f"Note {i+1}:\n{note}\n\n"
         
+        if 'debate_structures' in st.session_state and st.session_state.current_topic in st.session_state.debate_structures:
+            notes_text += f"\nDebate Structure:\n{st.session_state.debate_structures[st.session_state.current_topic]}\n"
+        
         st.download_button(
-            label="Download Notes",
+            label="Download Notes and Debate Structure",
             data=notes_text,
-            file_name=f"debate_notes_{st.session_state.current_topic}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+            file_name=f"debate_notes_and_structure_{st.session_state.current_topic}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
             mime="text/plain"
         )
 
