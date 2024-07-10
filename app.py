@@ -1,6 +1,10 @@
 import streamlit as st
 from datetime import datetime
+import os
 from ai_config import initialize_gemini, get_initial_guidance_prompt, get_debate_guidance_prompt, get_debate_structure_prompt, DEBATE_MILESTONES
+
+# Set page config at the very beginning
+st.set_page_config(layout="wide", page_title="Aristo - Elevate Your Debate Skills", initial_sidebar_state="collapsed")
 
 # Get the API key
 def get_api_key():
@@ -10,12 +14,30 @@ def get_api_key():
         return st.secrets.gemini_api_key
     return None
 
+def show_help():
+    # Read the help content from the file
+    help_file_path = os.path.join(os.path.dirname(__file__), 'help_content.md')
+    with open(help_file_path, 'r') as file:
+        help_content = file.read()
+    return help_content
+
 # Main app
 def main():
-    st.set_page_config(layout="wide", page_title="Aristo - Elevate Your Debate Skills")
+    # Move sidebar to the right
+    st.markdown(
+        """
+        <style>
+        .css-1544g2n {
+            margin-right: 0;
+            margin-left: auto;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
 
     # Application header
-    col1, col2, col3 = st.columns([3, 1, 1])
+    col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
     with col1:
         st.markdown(
             """
@@ -24,8 +46,22 @@ def main():
             unsafe_allow_html=True
         )
     with col3:
+        if st.button("❓ Help"):
+            st.session_state.show_help = not st.session_state.get('show_help', False)
+            st.experimental_rerun()
+    with col4:
         if st.button("⚙️ Settings"):
             st.session_state.show_settings = not st.session_state.get('show_settings', False)
+
+    # Help sidebar
+    with st.sidebar:
+        if st.session_state.get('show_help', False):
+            st.sidebar.title("How to Use")
+            help_content = show_help()
+            st.sidebar.markdown(help_content)
+            if st.sidebar.button("Close Help"):
+                st.session_state.show_help = False
+                st.experimental_rerun()
 
     if st.session_state.get('show_settings', False):
         with st.expander("Settings", expanded=True):
