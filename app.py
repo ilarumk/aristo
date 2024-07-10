@@ -1,33 +1,14 @@
 import streamlit as st
-import json
 from datetime import datetime
 from ai_config import initialize_gemini, get_initial_guidance_prompt, get_debate_guidance_prompt, get_debate_structure_prompt, DEBATE_MILESTONES
 
-
-# Initialize session state
-if 'topics' not in st.session_state:
-    st.session_state.topics = []
-if 'current_topic' not in st.session_state:
-    st.session_state.current_topic = None
-if 'chat_histories' not in st.session_state:
-    st.session_state.chat_histories = {}
-if 'notes' not in st.session_state:
-    st.session_state.notes = {}
-if 'show_settings' not in st.session_state:
-    st.session_state.show_settings = False
-if 'debate_progress' not in st.session_state:
-    st.session_state.debate_progress = 0
-
-# App settings
-@st.cache_data
-def load_settings():
-    try:
-        return st.secrets["gemini_api_key"]
-    except:
-        return ""
-
-def save_settings(api_key):
-    st.secrets["gemini_api_key"] = api_key
+# Get the API key
+def get_api_key():
+    if 'user_api_key' in st.session_state:
+        return st.session_state.user_api_key
+    elif 'gemini_api_key' in st.secrets:
+        return st.secrets.gemini_api_key
+    return None
 
 # Main app
 def main():
@@ -43,26 +24,39 @@ def main():
             unsafe_allow_html=True
         )
     with col3:
-        if st.button("⚙️ App Settings"):
-            st.session_state.show_settings = not st.session_state.show_settings
+        if st.button("⚙️ Settings"):
+            st.session_state.show_settings = not st.session_state.get('show_settings', False)
 
-    if st.session_state.show_settings:
-        with st.expander("App Settings", expanded=True):
-            api_key = st.text_input("Enter Gemini API Key", value=load_settings(), type="password")
+    if st.session_state.get('show_settings', False):
+        with st.expander("Settings", expanded=True):
+            new_api_key = st.text_input("Enter your Gemini API Key (optional)", type="password")
             if st.button("Save API Key"):
-                save_settings(api_key)
-                st.success("API Key saved successfully!")
+                if new_api_key:
+                    st.session_state.user_api_key = new_api_key
+                    st.success("API Key saved for this session!")
+                else:
+                    st.warning("No API key entered. Using the default key if available.")
+                st.session_state.show_settings = False
                 st.experimental_rerun()
+
+    # Get the API key
+    api_key = get_api_key()
+    if not api_key:
+        st.error("No API key available. Please enter a Gemini API key in the settings or set it in Streamlit secrets.")
+        return
+
+    # Initialize Gemini model
+    model = initialize_gemini(api_key)
 
     # Main content area
     if st.button("🏠 Home"):
         st.session_state.current_topic = None
         st.experimental_rerun()
 
-    if st.session_state.current_topic:
-        show_debate_page()
-    else:
+    if 'current_topic' not in st.session_state or st.session_state.current_topic is None:
         show_topics_page()
+    else:
+        show_debate_page(model)
 
 def show_topics_page():
     st.header("Welcome to Aristo!")
@@ -72,10 +66,13 @@ def show_topics_page():
 
     with col1:
         st.subheader("Your Topics")
+        if 'topics' not in st.session_state:
+            st.session_state.topics = []
         for topic in st.session_state.topics:
             if st.button(f"📌 {topic}", key=f"main_{topic}"):
                 st.session_state.current_topic = topic
-                st.session_state.debate_progress = 0
+                st.session_state.current_focus = 0
+                st.session_state.current_responses = {}
                 st.experimental_rerun()
 
         new_topic = st.text_input("Add a new topic")
@@ -101,26 +98,18 @@ def show_topics_page():
                     st.session_state.topics.append(topic)
                     st.experimental_rerun()
 
-from ai_config import initialize_gemini, get_debate_guidance_prompt, get_debate_structure_prompt, DEBATE_MILESTONES
-
-
-import streamlit as st
-from ai_config import initialize_gemini, get_initial_guidance_prompt, get_debate_guidance_prompt, get_debate_structure_prompt, DEBATE_MILESTONES
-
-def show_debate_page():
+def show_debate_page(model):
     st.header(f"Current Topic: {st.session_state.current_topic}", divider='rainbow')
+
+    # Progress indicator
+    progress = st.progress(st.session_state.current_focus / len(DEBATE_MILESTONES))
+    st.subheader(f"Current Focus: {DEBATE_MILESTONES[st.session_state.current_focus]}")
 
     tab1, tab2 = st.tabs(["Debate Preparation", "Notes"])
 
     with tab1:
-        api_key = load_settings()
-        model = initialize_gemini(api_key)
-        if not model:
-            st.error("Please set up your Gemini API key in the settings.")
-            return
-
-        if st.session_state.current_topic not in st.session_state.chat_histories:
-            st.session_state.chat_histories[st.session_state.current_topic] = []
+        if st.session_state.current_topic not in st.session_state.get('chat_histories', {}):
+            st.session_state.chat_histories = {st.session_state.current_topic: []}
         if 'current_focus' not in st.session_state:
             st.session_state.current_focus = 0
         if 'current_responses' not in st.session_state:
@@ -129,9 +118,6 @@ def show_debate_page():
             st.session_state.initial_guidance = ""
 
         chat_history = st.session_state.chat_histories[st.session_state.current_topic]
-
-        # Current Focus
-        st.subheader(f"Current Focus: {DEBATE_MILESTONES[st.session_state.current_focus]}")
 
         # Initial guidance
         if not st.session_state.initial_guidance:
@@ -193,10 +179,11 @@ def show_debate_page():
                 st.session_state.chat_histories[st.session_state.current_topic] = []
                 st.experimental_rerun()
         with col3:
-            if st.button("Complete and Move to Next Stage ➡️", type="primary"):
+            next_button_label = "Finalize" if st.session_state.current_focus == len(DEBATE_MILESTONES) - 1 else "Complete and Move to Next Stage ➡️"
+            if st.button(next_button_label, type="primary"):
                 # Add the current response to notes
-                if st.session_state.current_topic not in st.session_state.notes:
-                    st.session_state.notes[st.session_state.current_topic] = []
+                if st.session_state.current_topic not in st.session_state.get('notes', {}):
+                    st.session_state.notes = {st.session_state.current_topic: []}
                 # Save the final user input to notes
                 current_notes = st.session_state.notes[st.session_state.current_topic]
                 current_response = st.session_state.current_responses.get(st.session_state.current_focus, "")
@@ -206,22 +193,22 @@ def show_debate_page():
                     current_notes.append(f"{DEBATE_MILESTONES[st.session_state.current_focus]}: {current_response}")
                 st.success("Stage completed and added to notes!")
                 
-                # Move to next stage
-                st.session_state.current_focus += 1
-                if st.session_state.current_focus >= len(DEBATE_MILESTONES):
-                    st.session_state.current_focus = 0
+                # Move to next stage or finalize
+                if st.session_state.current_focus < len(DEBATE_MILESTONES) - 1:
+                    st.session_state.current_focus += 1
+                    st.session_state.initial_guidance = ""
+                    st.session_state.chat_histories[st.session_state.current_topic] = []
+                else:
                     st.success("Congratulations! You've completed all stages. Please check the Notes tab to generate your debate structure.")
-                st.session_state.initial_guidance = ""
-                st.session_state.chat_histories[st.session_state.current_topic] = []
                 st.experimental_rerun()
 
     with tab2:
-        show_notes_page()
+        show_notes_page(model)
 
-def show_notes_page():
+def show_notes_page(model):
     st.subheader(f"Notes for: {st.session_state.current_topic}")
 
-    if st.session_state.current_topic not in st.session_state.notes:
+    if st.session_state.current_topic not in st.session_state.get('notes', {}):
         st.write("No notes available for this topic yet. Complete the debate preparation stages to generate notes!")
     else:
         for i, note in enumerate(st.session_state.notes[st.session_state.current_topic]):
@@ -230,46 +217,41 @@ def show_notes_page():
     new_note = st.text_area("Add a custom note", key=f"new_note_{st.session_state.current_topic}")
     if st.button("Add Custom Note"):
         if new_note:
-            if st.session_state.current_topic not in st.session_state.notes:
-                st.session_state.notes[st.session_state.current_topic] = []
+            if st.session_state.current_topic not in st.session_state.get('notes', {}):
+                st.session_state.notes = {st.session_state.current_topic: []}
             st.session_state.notes[st.session_state.current_topic].append(new_note)
             st.success("Custom note added!")
             st.experimental_rerun()
 
-    if st.button("Generate Debate Structure"):
-        if st.session_state.current_topic in st.session_state.notes and st.session_state.notes[st.session_state.current_topic]:
-            api_key = load_settings()
-            model = initialize_gemini(api_key)
-            if model:
-                notes = "\n".join(st.session_state.notes[st.session_state.current_topic])
-                prompt = get_debate_structure_prompt(st.session_state.current_topic, notes)
-                response = model.generate_content(prompt)
-                debate_structure = response.text
-                st.markdown("## Debate Structure")
-                st.write(debate_structure)
-                
-                # Save the debate structure for the current user
-                if 'debate_structures' not in st.session_state:
-                    st.session_state.debate_structures = {}
-                st.session_state.debate_structures[st.session_state.current_topic] = debate_structure
-                st.success("Debate structure generated and saved!")
-            else:
-                st.error("Please set up your Gemini API key in the settings.")
+    if st.button("Generate Debate Summary"):
+        if st.session_state.current_topic in st.session_state.get('notes', {}) and st.session_state.notes[st.session_state.current_topic]:
+            notes = "\n".join(st.session_state.notes[st.session_state.current_topic])
+            prompt = get_debate_structure_prompt(st.session_state.current_topic, notes)
+            response = model.generate_content(prompt)
+            debate_summary = response.text
+            st.markdown("## Debate Summary")
+            st.write(debate_summary)
+            
+            # Save the debate summary for the current user
+            if 'debate_summaries' not in st.session_state:
+                st.session_state.debate_summaries = {}
+            st.session_state.debate_summaries[st.session_state.current_topic] = debate_summary
+            st.success("Debate summary generated and saved!")
         else:
-            st.warning("No notes available. Complete the debate preparation stages to generate a structure.")
+            st.warning("No notes available. Complete the debate preparation stages to generate a summary.")
 
-    if st.button("Print Notes and Debate Structure"):
+    if st.button("Print Notes and Debate Summary"):
         notes_text = f"Notes for topic: {st.session_state.current_topic}\n\n"
         for i, note in enumerate(st.session_state.notes.get(st.session_state.current_topic, [])):
             notes_text += f"Note {i+1}:\n{note}\n\n"
         
-        if 'debate_structures' in st.session_state and st.session_state.current_topic in st.session_state.debate_structures:
-            notes_text += f"\nDebate Structure:\n{st.session_state.debate_structures[st.session_state.current_topic]}\n"
+        if 'debate_summaries' in st.session_state and st.session_state.current_topic in st.session_state.debate_summaries:
+            notes_text += f"\nDebate Summary:\n{st.session_state.debate_summaries[st.session_state.current_topic]}\n"
         
         st.download_button(
-            label="Download Notes and Debate Structure",
+            label="Download Notes and Debate Summary",
             data=notes_text,
-            file_name=f"debate_notes_and_structure_{st.session_state.current_topic}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+            file_name=f"debate_notes_and_summary_{st.session_state.current_topic}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
             mime="text/plain"
         )
 
